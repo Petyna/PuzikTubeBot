@@ -2,8 +2,13 @@ import asyncio
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
+
+from cookie_manager import get_cookie_manager
+from config import COOKIE_FILE
 
 
 def clean_filename(filename: str) -> str:
@@ -20,9 +25,19 @@ def get_file_size(filepath: Path) -> int:
     return filepath.stat().st_size if filepath.exists() else 0
 
 
-async def run_ytdlp(command: list, cwd: Path | None = None) -> Tuple[bool, str]:
-    """Run a yt-dlp command asynchronously."""
+async def run_ytdlp(
+    command: list,
+    cwd: Path | None = None,
+    *,
+    _allow_cookie_retry: bool = True,
+    use_cookie_file: bool = False,
+) -> Tuple[bool, str]:
+    """Run a yt-dlp command asynchronously with optional cookie fallback."""
     try:
+        raw_command = list(command)
+        if command and command[0] == "yt-dlp":
+            command = [sys.executable, "-m", "yt_dlp", *command[1:]]
+
         process = await asyncio.create_subprocess_exec(
             *command,
             stdout=asyncio.subprocess.PIPE,
@@ -31,10 +46,56 @@ async def run_ytdlp(command: list, cwd: Path | None = None) -> Tuple[bool, str]:
         )
         stdout, stderr = await process.communicate()
 
+        # Debug: Log command and outputs
+        from config import logger
+        logger.info(f"Running yt-dlp command: {' '.join(command)}")
+        logger.info(f"Return code: {process.returncode}")
+        if stdout:
+            logger.info(f"STDOUT: {stdout.decode('utf-8', errors='replace')[:500]}")
+        if stderr:
+            logger.info(f"STDERR: {stderr.decode('utf-8', errors='replace')[:500]}")
+
         if process.returncode == 0:
-            return True, stdout.decode("utf-8")
-        return False, stderr.decode("utf-8")
+            return True, stdout.decode("utf-8", errors="replace")
+
+        error_output = stderr.decode("utf-8", errors="replace")
+
+        # Try fallback strategies
+        if _allow_cookie_retry:
+            # Strategy 1: DPAPI error - retry without browser cookies
+            if "--cookies-from-browser" in raw_command and "Failed to decrypt with DPAPI" in error_output:
+                logger.warning("DPAPI cookie decryption failed; retrying with cookie file")
+                
+                # Try with cookie file if available
+                cookie_mgr = get_cookie_manager(COOKIE_FILE)
+                if await cookie_mgr.is_file_valid():
+                    cleaned_command = []
+                    skip_next = False
+                    for part in raw_command:
+                        if skip_next:
+                            skip_next = False
+                            continue
+                        if part == "--cookies-from-browser":
+                            skip_next = True
+                            continue
+                        cleaned_command.append(part)
+                    
+                    # Add cookie file args
+                    cookie_args = cookie_mgr.get_cookie_args(use_browser_cookies=False)
+                    cleaned_command.extend(cookie_args)
+                    
+                    success, retry_output = await run_ytdlp(
+                        cleaned_command,
+                        cwd=cwd,
+                        _allow_cookie_retry=False,
+                    )
+                    if success:
+                        return True, retry_output
+
+        return False, error_output
     except Exception as exc:  # noqa: BLE001
+        from config import logger
+        logger.error(f"yt-dlp execution error: {exc}")
         return False, str(exc)
 
 
@@ -85,15 +146,32 @@ def get_link_service(url: str) -> Optional[str]:
 
 async def get_available_video_qualities(url: str) -> List[int]:
     """Return list of available AVC heights (e.g., 1080, 720) for the given video."""
-    command = [
+    base = [
         "yt-dlp",
         "--skip-download",
         "--no-warnings",
         "--dump-json",
-        url,
+        "--no-check-certificates",
+        "--user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "--add-header",
+        "Accept-Language:en-US,en;q=0.9",
+        "--extractor-retries",
+        "3",
+        "--fragment-retries",
+        "3",
+        "--retry-sleep",
+        "1",
+        "--force-ipv4",
+        "--geo-bypass",
     ]
 
-    success, output = await run_ytdlp(command)
+    with_cookies = base + ["--cookies", "cookies.txt", url]
+    without_cookies = base + [url]
+
+    success, output = await run_ytdlp(with_cookies)
+    if not success or not output:
+        success, output = await run_ytdlp(without_cookies)
     if not success or not output:
         return []
 
@@ -125,16 +203,33 @@ async def get_available_video_qualities(url: str) -> List[int]:
 
 async def get_youtube_resource_info(url: str) -> Dict[str, Any] | None:
     """Return metadata describing whether a YouTube URL is a single video or playlist."""
-    command = [
+    base = [
         "yt-dlp",
         "--skip-download",
         "--no-warnings",
         "--dump-single-json",
         "--flat-playlist",
-        url,
+        "--no-check-certificates",
+        "--user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "--add-header",
+        "Accept-Language:en-US,en;q=0.9",
+        "--extractor-retries",
+        "3",
+        "--fragment-retries",
+        "3",
+        "--retry-sleep",
+        "1",
+        "--force-ipv4",
+        "--geo-bypass",
     ]
 
-    success, output = await run_ytdlp(command)
+    with_cookies = base + ["--cookies", "cookies.txt", url]
+    without_cookies = base + [url]
+
+    success, output = await run_ytdlp(with_cookies)
+    if not success or not output:
+        success, output = await run_ytdlp(without_cookies)
     if not success or not output:
         return None
 
