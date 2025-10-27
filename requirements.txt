@@ -1,0 +1,5 @@
+aiogram
+yt-dlp
+gallery-dl
+aiohttp
+aiofiles

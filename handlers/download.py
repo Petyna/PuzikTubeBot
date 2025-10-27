@@ -1,18 +1,19 @@
 import asyncio
 import shutil
 from pathlib import Path
-from typing import Set
 
 from aiogram import Dispatcher, F, types
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from config import logger
+from config import logger, MAX_CONCURRENT_DOWNLOADS_PER_USER
+from task_manager import get_task_manager
+from progress_helper import ProgressTracker
 from downloads import (
     download_audio,
     download_playlist_audio,
-    download_instagram_video,
+    download_instagram_media,
     download_soundcloud_playlist,
     download_soundcloud_track,
     download_tiktok_video,
@@ -32,7 +33,7 @@ from utils import (
 )
 
 
-_active_users: Set[int] = set()
+# Task manager is now used instead of _active_users
 
 
 async def continuous_typing_action(message: Message, stop_event: asyncio.Event) -> None:
@@ -59,76 +60,226 @@ async def handle_incoming_url(message: Message, state: FSMContext) -> None:
 
     service = get_link_service(url)
 
-    user_id = message.from_user.id if message.from_user else None
-
-    if user_id is not None and user_id in _active_users:
-        await message.answer(
-            "⏳ You already have a download in progress. Please wait until it finishes.",
-        )
-        return
-
-    soundcloud_playlist = None
-    youtube_playlist = None
-    youtube_playlist_count = None
-
-    if service == "youtube":
-        yt_info = await get_youtube_resource_info(url)
-        youtube_playlist = bool(yt_info and yt_info.get("is_playlist"))
-        youtube_playlist_count = yt_info.get("entry_count") if yt_info else None
-
-        qualities = await get_available_video_qualities(url)
-        keyboard = create_main_keyboard(
-            qualities if qualities else None,
-            service="youtube",
-            include_playlist=bool(youtube_playlist),
-        )
-    elif service == "soundcloud":
-        qualities = []
-        sc_info = await get_soundcloud_resource_info(url)
-        soundcloud_playlist = bool(sc_info and sc_info.get("is_playlist"))
-        keyboard = create_main_keyboard(service="soundcloud", include_playlist=False)
-    elif service in {"instagram", "tiktok", "twitter"}:
-        qualities = []
-        keyboard = create_main_keyboard(service=service)
-    else:
+    if not service:
         await message.answer(
             "❌ Unsupported link. Send a URL from YouTube, SoundCloud, Instagram, TikTok, or Twitter."
         )
         return
 
+    task_mgr = get_task_manager()
+    user_id = message.from_user.id if message.from_user else None
+    
+    # Check concurrent downloads limit
     if user_id is not None:
-        _active_users.add(user_id)
+        active_count = await task_mgr.get_active_tasks_count(user_id)
+        if active_count >= MAX_CONCURRENT_DOWNLOADS_PER_USER:
+            await message.answer(
+                f"⏳ You have reached the maximum of {MAX_CONCURRENT_DOWNLOADS_PER_USER} concurrent downloads. "
+                "Please wait for one to finish before starting another.",
+            )
+            return
 
-    try:
+    if service == "soundcloud":
+        await state.clear()
+
+        owner_id = user_id or message.chat.id
+
+        async def process_soundcloud() -> None:
+            stop_typing = asyncio.Event()
+            typing_task = asyncio.create_task(continuous_typing_action(message, stop_typing))
+            progress_msg: Message | None = None
+            try:
+                progress_msg = await message.answer("⏳ Preparing…")
+
+                sc_info = await get_soundcloud_resource_info(url)
+                is_playlist = bool(sc_info and sc_info.get("is_playlist"))
+
+                await progress_msg.edit_text("📥 Downloading…")
+
+                if is_playlist:
+                    audio_files = await download_soundcloud_playlist(
+                        url,
+                        message,
+                        status_message=progress_msg,
+                    )
+
+                    if audio_files:
+                        await progress_msg.edit_text("📤 Sending…")
+                        sent_count = 0
+                        failed_count = 0
+
+                        for audio_path in audio_files:
+                            try:
+                                await message.answer_audio(
+                                    audio=types.FSInputFile(audio_path, filename=audio_path.name),
+                                    caption=f"🎵 {audio_path.stem}\n@PuzikTubeBot",
+                                )
+                                sent_count += 1
+                                await asyncio.sleep(1)
+                            except Exception as exc:
+                                logger.error("Error sending SoundCloud audio %s: %s", audio_path.name, exc)
+                                failed_count += 1
+
+                        if audio_files:
+                            shutil.rmtree(audio_files[0].parent, ignore_errors=True)
+
+                        summary = "✅ SoundCloud playlist download complete!\n"
+                        summary += f"Sent: {sent_count} tracks"
+                        if failed_count > 0:
+                            summary += f"\nFailed: {failed_count} tracks"
+
+                        await progress_msg.edit_text("✅ Completed!")
+                        await message.answer(f"{summary}\n@PuzikTubeBot")
+                    else:
+                        await progress_msg.edit_text("❌ Failed to download SoundCloud playlist.")
+                else:
+                    audio_path = await download_soundcloud_track(
+                        url,
+                        message,
+                        status_message=progress_msg,
+                    )
+
+                    if audio_path and audio_path.exists():
+                        await progress_msg.edit_text("📤 Sending…")
+                        try:
+                            await message.answer_audio(
+                                audio=types.FSInputFile(audio_path, filename=audio_path.name),
+                                caption=f"🎵 {audio_path.stem}\n@PuzikTubeBot",
+                            )
+                            await progress_msg.edit_text("✅ Completed!")
+                        except Exception as exc:
+                            logger.error("Error sending SoundCloud audio: %s", exc)
+                            await message.answer("❌ Error sending audio. File might be corrupted.")
+                            await progress_msg.edit_text("❌ Failed to send audio.")
+                        finally:
+                            shutil.rmtree(audio_path.parent, ignore_errors=True)
+                    else:
+                        await progress_msg.edit_text("❌ Failed to download SoundCloud audio.")
+            except Exception as exc:
+                logger.error("SoundCloud auto-download error: %s", exc, exc_info=True)
+                if progress_msg:
+                    await progress_msg.edit_text("❌ An error occurred while processing the SoundCloud link.")
+                else:
+                    await message.answer("❌ An error occurred while processing the SoundCloud link.")
+            finally:
+                stop_typing.set()
+                await typing_task
+
+        await task_mgr.create_task(
+            owner_id,
+            message.message_id,
+            url,
+            process_soundcloud(),
+        )
+        return
+
+    # Save link without running yt-dlp
+    await state.update_data(
+        pending_url=url,
+        service=service,
+        metadata_cache=None,
+    )
+    await state.set_state(DownloadStates.waiting_for_choice)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Download Options", callback_data="show_options")]
+    ])
+
+    await message.reply(
+        "✅ Link saved! Click below to see download options:",
+        reply_markup=keyboard
+    )
+
+
+async def show_options_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    """Show download options after user clicks Download Options button."""
+    data = await state.get_data()
+    url = data.get("pending_url")
+    service = data.get("service")
+    
+    if not url or not service:
+        await callback.message.edit_text("❌ No link found. Please send a new link.")
+        await state.clear()
+        await callback.answer()
+        return
+    
+    await callback.message.edit_text("⏳ Preparing options...")
+    
+    # Fetch metadata only once
+    metadata_cache = data.get("metadata_cache")
+    soundcloud_playlist = None
+    youtube_playlist = None
+    youtube_playlist_count = None
+    qualities = []
+    
+    if service == "youtube":
+        if not metadata_cache:
+            yt_info = await get_youtube_resource_info(url)
+            youtube_playlist = bool(yt_info and yt_info.get("is_playlist"))
+            youtube_playlist_count = yt_info.get("entry_count") if yt_info else None
+            
+            if not youtube_playlist:
+                qualities = await get_available_video_qualities(url)
+            
+            metadata_cache = {
+                "is_playlist": youtube_playlist,
+                "entry_count": youtube_playlist_count,
+                "qualities": qualities
+            }
+            await state.update_data(metadata_cache=metadata_cache)
+        else:
+            youtube_playlist = metadata_cache.get("is_playlist")
+            youtube_playlist_count = metadata_cache.get("entry_count")
+            qualities = metadata_cache.get("qualities", [])
+        
+        # Update state with metadata
         await state.update_data(
-            pending_url=url,
             qualities=qualities,
-            service=service,
-            is_soundcloud_playlist=soundcloud_playlist if service == "soundcloud" else None,
-            is_youtube_playlist=youtube_playlist if service == "youtube" else None,
-            youtube_playlist_count=youtube_playlist_count if service == "youtube" else None,
+            is_youtube_playlist=youtube_playlist,
+            youtube_playlist_count=youtube_playlist_count,
         )
-        await state.set_state(DownloadStates.waiting_for_choice)
-
-        await message.answer(
-            "✅ Link received! Choose what you want to download:",
-            reply_markup=keyboard,
-            parse_mode="Markdown",
+        
+        if youtube_playlist:
+            keyboard = create_main_keyboard(service="youtube", include_playlist=True)
+        else:
+            keyboard = create_main_keyboard(service="youtube", qualities=qualities, include_playlist=False)
+    
+    elif service == "soundcloud":
+        if not metadata_cache:
+            sc_info = await get_soundcloud_resource_info(url)
+            soundcloud_playlist = bool(sc_info and sc_info.get("is_playlist"))
+            
+            metadata_cache = {
+                "is_playlist": soundcloud_playlist
+            }
+            await state.update_data(metadata_cache=metadata_cache)
+        else:
+            soundcloud_playlist = metadata_cache.get("is_playlist")
+        
+        await state.update_data(
+            is_soundcloud_playlist=soundcloud_playlist,
         )
-    except Exception:
-        if user_id is not None:
-            _active_users.discard(user_id)
-        raise
+        keyboard = create_main_keyboard(service="soundcloud", include_playlist=False)
+    
+    elif service in {"instagram", "tiktok", "twitter"}:
+        keyboard = create_main_keyboard(service=service)
+    else:
+        await callback.message.edit_text("❌ Unsupported service.")
+        await state.clear()
+        await callback.answer()
+        return
+    
+    await callback.message.edit_text(
+        "📥 Choose what you want to download:",
+        reply_markup=keyboard
+    )
+    await callback.answer()
 
 
 async def back_to_menu_handler(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    user_id = callback.from_user.id if callback.from_user else None
-    if user_id is not None:
-        _active_users.discard(user_id)
     await callback.message.edit_text(
         "Send me a link to start a download.",
-        parse_mode="Markdown",
     )
     await callback.answer()
 
@@ -191,9 +342,10 @@ async def download_video_handler(callback: CallbackQuery, state: FSMContext) -> 
                 playlist_note = (
                     f" ({youtube_playlist_count} item(s))" if youtube_playlist_count else ""
                 )
+                await message.edit_text(f"⏳ Preparing playlist download{playlist_note}...")
+                await asyncio.sleep(0.5)
                 await message.edit_text(
-                    f"📝 Downloading playlist videos{playlist_note} ({quality_label})...",
-                    parse_mode="Markdown",
+                    f"📥 Downloading playlist videos{playlist_note} ({quality_label})...",
                 )
                 video_path = await download_youtube_playlist_videos(
                     url,
@@ -201,9 +353,10 @@ async def download_video_handler(callback: CallbackQuery, state: FSMContext) -> 
                     selected_quality,
                 )
             else:
+                await message.edit_text("⏳ Preparing download...")
+                await asyncio.sleep(0.5)
                 await message.edit_text(
-                    f"📹 Downloading video ({quality_label})...",
-                    parse_mode="Markdown",
+                    f"📥 Downloading video ({quality_label})...",
                 )
                 video_path = await download_video(url, message, selected_quality)
 
@@ -211,7 +364,7 @@ async def download_video_handler(callback: CallbackQuery, state: FSMContext) -> 
             service_map = {
                 "instagram": (
                     "📸 Downloading Instagram media...",
-                    download_instagram_video,
+                    download_instagram_media,
                 ),
                 "tiktok": (
                     "🎬 Downloading TikTok video...",
@@ -226,13 +379,15 @@ async def download_video_handler(callback: CallbackQuery, state: FSMContext) -> 
             if service not in service_map:
                 await message.edit_text(
                     "❌ Video downloads are not supported for this service.",
-                    parse_mode="Markdown",
+                    
                 )
                 await state.clear()
                 return
 
             status_text, downloader = service_map[service]
-            await message.edit_text(status_text, parse_mode="Markdown")
+            await message.edit_text("⏳ Preparing download...")
+            await asyncio.sleep(0.5)
+            await message.edit_text(status_text)
             video_path = await downloader(url, message)
 
         media_paths: list[Path] = []
@@ -254,10 +409,12 @@ async def download_video_handler(callback: CallbackQuery, state: FSMContext) -> 
             total = len(media_paths)
             sent_count = 0
             failed_count = 0
+            
+            await message.edit_text("📤 Sending files...")
 
             for index, path in enumerate(media_paths, start=1):
                 suffix = path.suffix.lower()
-                caption = f"✅ **{path.stem}** ({index}/{total})\n@PuzikTubeBot"
+                caption = f"✅ {path.stem} ({index}/{total})\n@PuzikTubeBot"
 
                 try:
                     fs_file = types.FSInputFile(path, filename=path.name)
@@ -266,25 +423,21 @@ async def download_video_handler(callback: CallbackQuery, state: FSMContext) -> 
                         await message.answer_photo(
                             photo=fs_file,
                             caption=caption,
-                            parse_mode="Markdown",
                         )
                     elif suffix in gif_exts:
                         await message.answer_animation(
                             animation=fs_file,
                             caption=caption,
-                            parse_mode="Markdown",
                         )
                     elif suffix in video_exts:
                         await message.answer_video(
                             video=fs_file,
                             caption=caption,
-                            parse_mode="Markdown",
                             supports_streaming=True,
                         )
                     else:
                         await message.answer(
                             caption,
-                            parse_mode="Markdown",
                         )
 
                     sent_count += 1
@@ -302,9 +455,6 @@ async def download_video_handler(callback: CallbackQuery, state: FSMContext) -> 
                 await message.answer(summary)
 
             await state.clear()
-            user_id = callback.from_user.id if callback.from_user else None
-            if user_id is not None:
-                _active_users.discard(user_id)
 
             for directory in cleanup_dirs:
                 shutil.rmtree(directory, ignore_errors=True)
@@ -313,9 +463,6 @@ async def download_video_handler(callback: CallbackQuery, state: FSMContext) -> 
                 "Failed to download video. This might be due to YouTube restrictions or the video being unavailable.",
             )
             await state.clear()
-            user_id = callback.from_user.id if callback.from_user else None
-            if user_id is not None:
-                _active_users.discard(user_id)
     
     finally:
         # Stop typing action
@@ -338,7 +485,9 @@ async def download_audio_handler(callback: CallbackQuery, state: FSMContext) -> 
     typing_task = asyncio.create_task(continuous_typing_action(message, stop_typing))
 
     try:
-        await message.edit_text("🎵 Downloading audio...", parse_mode="Markdown")
+        await message.edit_text("⏳ Preparing audio download...")
+        await asyncio.sleep(0.5)
+        await message.edit_text("📥 Downloading audio...")
 
         if service == "soundcloud":
             is_playlist = data.get("is_soundcloud_playlist")
@@ -347,13 +496,14 @@ async def download_audio_handler(callback: CallbackQuery, state: FSMContext) -> 
                 if audio_files:
                     sent_count = 0
                     failed_count = 0
+                    
+                    await message.edit_text("📤 Sending audio files...")
 
                     for audio_path in audio_files:
                         try:
                             await message.answer_audio(
                                 audio=types.FSInputFile(audio_path, filename=audio_path.name),
-                                caption=f"🎵 **{audio_path.stem}**\n@PuzikTubeBot",
-                                parse_mode="Markdown",
+                                caption=f"🎵 {audio_path.stem}\n@PuzikTubeBot",
                             )
                             sent_count += 1
                             await asyncio.sleep(1)
@@ -371,14 +521,8 @@ async def download_audio_handler(callback: CallbackQuery, state: FSMContext) -> 
 
                     await message.answer(f"{summary}\n@PuzikTubeBot")
                     await state.clear()
-                    user_id = callback.from_user.id if callback.from_user else None
-                    if user_id is not None:
-                        _active_users.discard(user_id)
                 else:
                     await state.clear()
-                    user_id = callback.from_user.id if callback.from_user else None
-                    if user_id is not None:
-                        _active_users.discard(user_id)
                 return
 
             track_path = await download_soundcloud_track(url, message)
@@ -388,25 +532,22 @@ async def download_audio_handler(callback: CallbackQuery, state: FSMContext) -> 
         else:
             await message.edit_text(
                 "❌ Audio download is not available for this platform.",
-                parse_mode="Markdown",
+                
             )
             await state.clear()
             return
 
         if audio_path:
+            await message.edit_text("📤 Sending audio...")
             try:
                 await message.answer_audio(
                     audio=types.FSInputFile(audio_path, filename=audio_path.name),
-                    caption=f"🎵 **{audio_path.stem}**\n@PuzikTubeBot",
-                    parse_mode="Markdown",
+                    caption=f"🎵 {audio_path.stem}\n@PuzikTubeBot",
                 )
 
                 shutil.rmtree(audio_path.parent, ignore_errors=True)
 
                 await state.clear()
-                user_id = callback.from_user.id if callback.from_user else None
-                if user_id is not None:
-                    _active_users.discard(user_id)
             except Exception as exc:
                 logger.error("Error sending audio: %s", exc)
                 await message.answer(
@@ -414,17 +555,11 @@ async def download_audio_handler(callback: CallbackQuery, state: FSMContext) -> 
                 )
                 shutil.rmtree(audio_path.parent, ignore_errors=True)
                 await state.clear()
-                user_id = callback.from_user.id if callback.from_user else None
-                if user_id is not None:
-                    _active_users.discard(user_id)
         else:
             await message.answer(
                 "Failed to download audio. This might be due to YouTube restrictions or the video being unavailable.",
             )
             await state.clear()
-            user_id = callback.from_user.id if callback.from_user else None
-            if user_id is not None:
-                _active_users.discard(user_id)
     
     finally:
         # Stop typing action
@@ -446,23 +581,22 @@ async def _handle_audio_download(callback: CallbackQuery, state: FSMContext, dow
     typing_task = asyncio.create_task(continuous_typing_action(message, stop_typing))
     
     try:
-        await message.edit_text(f"🎵 Downloading {service_name} audio...", parse_mode="Markdown")
+        await message.edit_text("⏳ Preparing download...")
+        await asyncio.sleep(0.5)
+        await message.edit_text(f"📥 Downloading {service_name} audio...")
         
         # Call the appropriate download function
         audio_path = await download_func(url, message)
         
         if audio_path and audio_path.exists():
+            await message.edit_text("📤 Sending audio...")
             try:
                 await message.answer_audio(
                     audio=types.FSInputFile(audio_path, filename=audio_path.name),
-                    caption=f"🎵 **{audio_path.stem}**\n@PuzikTubeBot",
-                    parse_mode="Markdown",
+                    caption=f"🎵 {audio_path.stem}\n@PuzikTubeBot",
                 )
                 shutil.rmtree(audio_path.parent, ignore_errors=True)
                 await state.clear()
-                user_id = callback.from_user.id if callback.from_user else None
-                if user_id is not None:
-                    _active_users.discard(user_id)
             except Exception as exc:
                 logger.error("Error sending audio: %s", exc)
                 await message.answer("❌ Error sending audio. The file might be too large or corrupted.")
@@ -506,7 +640,9 @@ async def download_playlist_handler(callback: CallbackQuery, state: FSMContext) 
     typing_task = asyncio.create_task(continuous_typing_action(message, stop_typing))
 
     try:
-        await message.edit_text("📝 Downloading playlist...", parse_mode="Markdown")
+        await message.edit_text("⏳ Preparing playlist download...")
+        await asyncio.sleep(0.5)
+        await message.edit_text("📥 Downloading playlist...")
 
         if service == "soundcloud":
             audio_files = await download_soundcloud_playlist(url, message)
@@ -515,7 +651,7 @@ async def download_playlist_handler(callback: CallbackQuery, state: FSMContext) 
         else:
             await message.edit_text(
                 "❌ Playlist download is not available for this platform.",
-                parse_mode="Markdown",
+                
             )
             await state.clear()
             return
@@ -523,13 +659,14 @@ async def download_playlist_handler(callback: CallbackQuery, state: FSMContext) 
         if audio_files:
             sent_count = 0
             failed_count = 0
+            
+            await message.edit_text("📤 Sending audio files...")
 
             for audio_path in audio_files:
                 try:
                     await message.answer_audio(
                         audio=types.FSInputFile(audio_path, filename=audio_path.name),
-                        caption=f"🎵 **{audio_path.stem}**\n@PuzikTubeBot",
-                        parse_mode="Markdown",
+                        caption=f"🎵 {audio_path.stem}\n@PuzikTubeBot",
                     )
                     sent_count += 1
                     await asyncio.sleep(1)
@@ -549,17 +686,11 @@ async def download_playlist_handler(callback: CallbackQuery, state: FSMContext) 
                 f"{summary}\n@PuzikTubeBot",
             )
             await state.clear()
-            user_id = callback.from_user.id if callback.from_user else None
-            if user_id is not None:
-                _active_users.discard(user_id)
         else:
             await message.answer(
                 "Failed to download playlist. This might be due to YouTube restrictions or unavailable videos.",
             )
             await state.clear()
-            user_id = callback.from_user.id if callback.from_user else None
-            if user_id is not None:
-                _active_users.discard(user_id)
     
     finally:
         # Stop typing action
@@ -568,6 +699,11 @@ async def download_playlist_handler(callback: CallbackQuery, state: FSMContext) 
 
 
 def register_download_handlers(dp: Dispatcher) -> None:
+    dp.callback_query.register(
+        show_options_handler,
+        DownloadStates.waiting_for_choice,
+        F.data == "show_options",
+    )
     dp.callback_query.register(
         back_to_menu_handler,
         DownloadStates.waiting_for_choice,
