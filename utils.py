@@ -101,31 +101,31 @@ async def run_ytdlp(
 
 def is_youtube_url(url: str) -> bool:
     """Validate if URL is from YouTube."""
-    youtube_regex = r"(https?://)?(www\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+"
+    youtube_regex = r"(https?://)?([a-zA-Z0-9-]+\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+"
     return bool(re.match(youtube_regex, url))
 
 
 def is_soundcloud_url(url: str) -> bool:
     """Validate if URL is from SoundCloud."""
-    soundcloud_regex = r"(https?://)?(www\.)?soundcloud\.com/.+"
+    soundcloud_regex = r"(https?://)?([a-zA-Z0-9-]+\.)?soundcloud\.com/.+"
     return bool(re.match(soundcloud_regex, url))
 
 
 def is_instagram_url(url: str) -> bool:
     """Validate if URL is from Instagram."""
-    instagram_regex = r"(https?://)?(www\.)?(instagram\.com|instagr\.am)/.+"
+    instagram_regex = r"(https?://)?([a-zA-Z0-9-]+\.)?(instagram\.com|instagr\.am)/.+"
     return bool(re.match(instagram_regex, url))
 
 
 def is_tiktok_url(url: str) -> bool:
     """Validate if URL is from TikTok."""
-    tiktok_regex = r"(https?://)?(www\.)?tiktok\.com/.+"
+    tiktok_regex = r"(https?://)?([a-zA-Z0-9-]+\.)?tiktok\.com/.+"
     return bool(re.match(tiktok_regex, url))
 
 
 def is_twitter_url(url: str) -> bool:
     """Validate if URL is from Twitter/X."""
-    twitter_regex = r"(https?://)?(www\.)?(twitter\.com|x\.com)/.+"
+    twitter_regex = r"(https?://)?([a-zA-Z0-9-]+\.)?(twitter\.com|x\.com)/.+"
     return bool(re.match(twitter_regex, url))
 
 
