@@ -1,8 +1,12 @@
+![photo_2025-09-29_13-41-29](https://github.com/user-attachments/assets/6400237a-1642-483b-a37d-a36e38c610c5)
+
 # PuzikTubeBot
+@PuzikTubeBot — Telegram
 
 Telegram bot that downloads media from YouTube, SoundCloud, Spotify (via SpotDL), TikTok, Twitter/X, and Instagram. Drop a link — get the file.
 
 ## Features
+
 
 - YouTube: video/audio with quality selection, playlists supported  
 - SoundCloud: tracks & playlists  
