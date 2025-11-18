@@ -4,3 +4,4 @@ gallery-dl
 spotdl
 aiohttp
 aiofiles
+python-dotenv

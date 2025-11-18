@@ -2,8 +2,14 @@ import logging
 import os
 from pathlib import Path
 
-# Bot token - Replace with your actual token or use environment variable
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8387845710:AAEYYfCCzRyEbHBTK-AsMo9CLv9ujSdVUGM")
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Bot token loaded from environment/.env
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN is not set. Define it in your environment or .env file.")
 
 # Configure logging
 logging.basicConfig(
