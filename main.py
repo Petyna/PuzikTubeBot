@@ -1,4 +1,5 @@
 import asyncio
+import re
 import shutil
 import subprocess
 import sys
@@ -31,7 +32,39 @@ def ensure_yt_dlp() -> None:
             text=True,
             check=False,
         )
-        logger.info("yt-dlp update: %s", update_result.stdout.strip())
+        update_output = (update_result.stdout or "") + (update_result.stderr or "")
+        logger.info("yt-dlp update: %s", update_output.strip())
+
+        current_version = None
+        latest_version = None
+        current_match = re.search(r"Current version:\s*(\S+)", update_output)
+        latest_match = re.search(r"Latest version:\s*(\S+)", update_output)
+        if current_match:
+            current_version = current_match.group(1)
+        if latest_match:
+            latest_version = latest_match.group(1)
+
+        needs_pip_upgrade = update_result.returncode != 0
+        if not needs_pip_upgrade and current_version and latest_version:
+            needs_pip_upgrade = current_version != latest_version
+
+        if needs_pip_upgrade:
+            logger.info(
+                "Upgrading yt-dlp via pip%s...",
+                f" to {latest_version}" if latest_version else "",
+            )
+            pip_result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if pip_result.stdout:
+                logger.info("pip stdout: %s", pip_result.stdout.strip())
+            if pip_result.stderr:
+                logger.warning("pip stderr: %s", pip_result.stderr.strip())
+            if pip_result.returncode != 0:
+                logger.warning("pip upgrade exited with code %s", pip_result.returncode)
 
         version_result = subprocess.run(
             [sys.executable, "-m", "yt_dlp", "--version"],

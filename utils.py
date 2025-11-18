@@ -8,7 +8,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from cookie_manager import get_cookie_manager
-from config import COOKIE_FILE
+from config import COOKIE_FILE, YTDLP_PROXY
+
+
+URL_REGEX = re.compile(r"(https?://[^\s]+)", re.IGNORECASE)
 
 
 def clean_filename(filename: str) -> str:
@@ -34,6 +37,15 @@ async def run_ytdlp(
 ) -> Tuple[bool, str]:
     """Run a yt-dlp command asynchronously with optional cookie fallback."""
     try:
+        command = list(command)
+        if (
+            command
+            and command[0] == "yt-dlp"
+            and YTDLP_PROXY
+            and "--proxy" not in command
+        ):
+            command[1:1] = ["--proxy", YTDLP_PROXY]
+
         raw_command = list(command)
         if command and command[0] == "yt-dlp":
             command = [sys.executable, "-m", "yt_dlp", *command[1:]]
@@ -111,6 +123,12 @@ def is_soundcloud_url(url: str) -> bool:
     return bool(re.match(soundcloud_regex, url))
 
 
+def is_spotify_url(url: str) -> bool:
+    """Validate if URL is from Spotify."""
+    spotify_regex = r"(https?://)?open\.spotify\.com/.+"
+    return bool(re.match(spotify_regex, url))
+
+
 def is_instagram_url(url: str) -> bool:
     """Validate if URL is from Instagram."""
     instagram_regex = r"(https?://)?([a-zA-Z0-9-]+\.)?(instagram\.com|instagr\.am)/.+"
@@ -135,6 +153,8 @@ def get_link_service(url: str) -> Optional[str]:
         return "youtube"
     if is_soundcloud_url(url):
         return "soundcloud"
+    if is_spotify_url(url):
+        return "spotify"
     if is_instagram_url(url):
         return "instagram"
     if is_tiktok_url(url):
@@ -142,6 +162,47 @@ def get_link_service(url: str) -> Optional[str]:
     if is_twitter_url(url):
         return "twitter"
     return None
+
+
+def get_spotify_resource_type(url: str) -> Optional[str]:
+    """Return Spotify resource type based on URL path."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if not path_parts:
+        return None
+
+    resource_type = path_parts[0]
+    valid_types = {
+        "track",
+        "playlist",
+        "album",
+        "artist",
+        "show",
+        "episode",
+    }
+
+    if resource_type == "embed" and len(path_parts) > 1:
+        resource_type = path_parts[1]
+
+    return resource_type if resource_type in valid_types else None
+
+
+def extract_first_url(text: str) -> Optional[str]:
+    """Extract the first URL-like substring from arbitrary text."""
+    if not text:
+        return None
+
+    match = URL_REGEX.search(text)
+    if not match:
+        return None
+
+    url = match.group(1)
+    trailing_chars = ".,!?:;)\"'[]"
+    return url.rstrip(trailing_chars)
 
 
 async def get_available_video_qualities(url: str) -> List[int]:

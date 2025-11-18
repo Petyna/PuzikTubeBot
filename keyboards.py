@@ -5,6 +5,7 @@ def create_main_keyboard(
     qualities: list[int] | None = None,
     service: str = "youtube",
     include_playlist: bool = True,
+    spotify_type: str | None = None,
 ) -> InlineKeyboardMarkup:
     keyboard: list[list[InlineKeyboardButton]] = []
 
@@ -23,6 +24,42 @@ def create_main_keyboard(
                     InlineKeyboardButton(
                         text="📝 Download SoundCloud Playlist",
                         callback_data="download_sc_playlist",
+                    )
+                ]
+            )
+    elif service == "spotify":
+        track_types = {"track", "episode"}
+        collection_types = {"playlist", "album", "artist", "show"}
+
+        if spotify_type in track_types or not include_playlist:
+            track_label = "🎧 Download Spotify Track"
+            if spotify_type == "episode":
+                track_label = "🎧 Download Spotify Episode"
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        text=track_label,
+                        callback_data="download_audio",
+                    )
+                ]
+            )
+
+        if include_playlist or spotify_type in collection_types:
+            playlist_label = "📝 Download Spotify Collection"
+            if spotify_type == "playlist":
+                playlist_label = "📝 Download Spotify Playlist"
+            elif spotify_type == "album":
+                playlist_label = "📝 Download Spotify Album"
+            elif spotify_type == "artist":
+                playlist_label = "📝 Download Artist Top Tracks"
+            elif spotify_type == "show":
+                playlist_label = "📝 Download Spotify Show"
+
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        text=playlist_label,
+                        callback_data="download_playlist",
                     )
                 ]
             )

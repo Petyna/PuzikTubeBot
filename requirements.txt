@@ -1,5 +1,6 @@
 aiogram
 yt-dlp
 gallery-dl
+spotdl
 aiohttp
 aiofiles

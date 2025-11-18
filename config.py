@@ -24,6 +24,9 @@ DOWNLOAD_DIR.mkdir(exist_ok=True)
 COOKIE_FILE = Path("cookies.txt")
 COOKIE_MONITOR_INTERVAL = 30  # Check for cookie file updates every 30 seconds
 
+# Network / proxy configuration
+YTDLP_PROXY = os.getenv("YTDLP_PROXY")  # e.g., socks5://user:pass@host:port
+
 # Cache configuration
 CACHE_ENABLED = True
 CACHE_TTL = 3600  # Cache download results for 1 hour
