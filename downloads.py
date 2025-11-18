@@ -1,5 +1,6 @@
 import asyncio
 import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -67,6 +68,43 @@ async def run_gallery_dl(url: str, output_dir: Path) -> tuple[bool, str]:
             last_output = str(exc)
             
     return False, last_output
+
+
+async def run_spotdl(args: list[str], cwd: Path | None = None) -> tuple[bool, str]:
+    """Run a spotdl command asynchronously."""
+    command = [sys.executable, "-m", "spotdl", *args]
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
+        )
+        stdout, stderr = await process.communicate()
+
+        stdout_text = stdout.decode("utf-8", errors="replace")
+        stderr_text = stderr.decode("utf-8", errors="replace")
+
+        logger.info("Running spotdl command: %s", " ".join(command))
+        logger.info("spotdl return code: %d", process.returncode)
+        if stdout_text:
+            logger.info("spotdl STDOUT: %s", stdout_text[:500])
+        if stderr_text:
+            logger.info("spotdl STDERR: %s", stderr_text[:500])
+
+        if process.returncode == 0:
+            return True, stdout_text or stderr_text
+
+        return False, stderr_text or stdout_text
+
+    except FileNotFoundError:
+        error_msg = "spotdl is not installed. Install it with 'pip install spotdl'."
+        logger.error(error_msg)
+        return False, error_msg
+    except Exception as exc:  # noqa: BLE001
+        logger.error("spotdl execution error: %s", exc)
+        return False, str(exc)
 
 
 def _build_format_selectors(max_height: int, enforce_avc: bool) -> tuple[str, str]:
@@ -238,7 +276,6 @@ async def download_video(
                 "5",
                 "--ignore-errors",
                 "--no-warnings",
-                "--no-sleep-requests",
                 "--force-ipv4",
                 "--geo-bypass",
             ]
@@ -365,7 +402,6 @@ async def download_youtube_playlist_videos(
                 "5",
                 "--ignore-errors",
                 "--no-warnings",
-                "--no-sleep-requests",
                 "--force-ipv4",
                 "--geo-bypass",
                 url,
@@ -892,7 +928,6 @@ async def download_audio(url: str, message: Message) -> Optional[Path]:
                 "5",
                 "--ignore-errors",
                 "--no-warnings",
-                "--no-sleep-requests",
                 "--force-ipv4",
                 "--geo-bypass",
                 url,
@@ -925,6 +960,138 @@ async def download_audio(url: str, message: Message) -> Optional[Path]:
     except Exception as exc:  # noqa: BLE001
         logger.error("Audio download error: %s", exc)
         return None
+
+
+def _collect_spotify_audio_files(temp_dir: Path) -> list[Path]:
+    """Return flattened list of Spotify mp3 files inside temp_dir."""
+    audio_files = sorted(temp_dir.rglob("*.mp3"))
+    normalized: list[Path] = []
+
+    for audio_path in audio_files:
+        target_path = temp_dir / audio_path.name
+        if audio_path.parent != temp_dir:
+            candidate = target_path
+            counter = 1
+            while candidate.exists():
+                candidate = temp_dir / f"{audio_path.stem}_{counter}{audio_path.suffix}"
+                counter += 1
+            audio_path.rename(candidate)
+            audio_path = candidate
+        normalized.append(audio_path)
+
+    return normalized
+
+
+async def download_spotify_track(url: str, message: Message) -> Optional[Path]:
+    """Download a single Spotify resource (track/episode) as MP3 via spotdl."""
+    temp_dir: Path | None = None
+    status_msg: Message | None = None
+
+    try:
+        download_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        temp_dir = DOWNLOAD_DIR / f"spotify_track_{download_id}"
+        temp_dir.mkdir(exist_ok=True)
+
+        status_msg = await message.answer("🎧 Starting Spotify download...")
+
+        args = [
+            "download",
+            url,
+            "--format",
+            "mp3",
+            "--bitrate",
+            "320k",
+        ]
+        success, output = await run_spotdl(args, cwd=temp_dir)
+
+        if not success:
+            if status_msg:
+                await status_msg.edit_text(f"❌ Spotify download failed: {output[:500]}")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return None
+
+        files = _collect_spotify_audio_files(temp_dir)
+        if not files:
+            if status_msg:
+                await status_msg.edit_text("❌ No Spotify audio file was downloaded")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return None
+
+        track_path = files[0]
+        file_size = get_file_size(track_path)
+        if file_size > MAX_FILE_SIZE:
+            if status_msg:
+                await status_msg.edit_text(
+                    f"❌ File too large ({file_size // (1024 * 1024)}MB). Maximum is 50MB."
+                )
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return None
+
+        if status_msg:
+            await status_msg.edit_text("✅ Spotify audio downloaded! Sending...")
+        return track_path
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Spotify track download error: %s", exc, exc_info=True)
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return None
+
+
+async def download_spotify_playlist(url: str, message: Message) -> List[Path]:
+    """Download Spotify playlist/album/artist/show via spotdl."""
+    temp_dir: Path | None = None
+    status_msg: Message | None = None
+
+    try:
+        download_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        temp_dir = DOWNLOAD_DIR / f"spotify_playlist_{download_id}"
+        temp_dir.mkdir(exist_ok=True)
+
+        status_msg = await message.answer("📝 Starting Spotify collection download...")
+
+        args = [
+            "download",
+            url,
+            "--format",
+            "mp3",
+            "--bitrate",
+            "320k",
+        ]
+        success, output = await run_spotdl(args, cwd=temp_dir)
+
+        if not success:
+            if status_msg:
+                await status_msg.edit_text(f"❌ Spotify download failed: {output[:500]}")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return []
+
+        files = _collect_spotify_audio_files(temp_dir)
+        if not files:
+            if status_msg:
+                await status_msg.edit_text("❌ No Spotify audio files were downloaded")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return []
+
+        valid_files = [file for file in files if get_file_size(file) <= MAX_FILE_SIZE]
+
+        if not valid_files:
+            if status_msg:
+                await status_msg.edit_text("❌ All Spotify tracks are too large to send")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return []
+
+        if status_msg:
+            await status_msg.edit_text(
+                f"✅ Downloaded {len(valid_files)} Spotify track(s)! Sending..."
+            )
+        return valid_files
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Spotify playlist download error: %s", exc, exc_info=True)
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return []
 
 
 async def download_playlist_audio(url: str, message: Message) -> List[Path]:
@@ -990,7 +1157,6 @@ async def download_playlist_audio(url: str, message: Message) -> List[Path]:
                 "--extractor-retries",
                 "5",
                 "--no-warnings",
-                "--no-sleep-requests",
                 "--force-ipv4",
                 "--geo-bypass",
                 url,

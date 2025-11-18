@@ -2,8 +2,14 @@ import logging
 import os
 from pathlib import Path
 
-# Bot token - Replace with your actual token or use environment variable
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8387845710:AAEYYfCCzRyEbHBTK-AsMo9CLv9ujSdVUGM")
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Bot token loaded from environment/.env
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN is not set. Define it in your environment or .env file.")
 
 # Configure logging
 logging.basicConfig(
@@ -23,6 +29,9 @@ DOWNLOAD_DIR.mkdir(exist_ok=True)
 # Cookie configuration
 COOKIE_FILE = Path("cookies.txt")
 COOKIE_MONITOR_INTERVAL = 30  # Check for cookie file updates every 30 seconds
+
+# Network / proxy configuration
+YTDLP_PROXY = os.getenv("YTDLP_PROXY")  # e.g., socks5://user:pass@host:port
 
 # Cache configuration
 CACHE_ENABLED = True

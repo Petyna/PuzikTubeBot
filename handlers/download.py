@@ -16,6 +16,8 @@ from downloads import (
     download_instagram_media,
     download_soundcloud_playlist,
     download_soundcloud_track,
+    download_spotify_playlist,
+    download_spotify_track,
     download_tiktok_video,
     download_twitter_video,
     download_tiktok_audio,
@@ -26,9 +28,11 @@ from downloads import (
 from keyboards import create_main_keyboard
 from states import DownloadStates
 from utils import (
+    extract_first_url,
     get_available_video_qualities,
     get_link_service,
     get_soundcloud_resource_info,
+    get_spotify_resource_type,
     get_youtube_resource_info,
 )
 
@@ -56,13 +60,18 @@ async def continuous_typing_action(message: Message, stop_event: asyncio.Event) 
 
 
 async def handle_incoming_url(message: Message, state: FSMContext) -> None:
-    url = message.text.strip()
+    text = (message.text or "").strip()
+    url = extract_first_url(text)
+
+    if not url:
+        await message.answer("❌ Please send a valid link from a supported platform.")
+        return
 
     service = get_link_service(url)
 
     if not service:
         await message.answer(
-            "❌ Unsupported link. Send a URL from YouTube, SoundCloud, Instagram, TikTok, or Twitter."
+            "❌ Unsupported link. Send a URL from YouTube, SoundCloud, Spotify, Instagram, TikTok, or Twitter."
         )
         return
 
@@ -261,6 +270,25 @@ async def show_options_handler(callback: CallbackQuery, state: FSMContext) -> No
         )
         keyboard = create_main_keyboard(service="soundcloud", include_playlist=False)
     
+    elif service == "spotify":
+        spotify_type = get_spotify_resource_type(url)
+        track_types = {"track", "episode"}
+        collection_types = {"playlist", "album", "artist", "show"}
+
+        is_collection = bool(spotify_type in collection_types)
+        is_track = bool(spotify_type in track_types)
+
+        await state.update_data(
+            spotify_resource_type=spotify_type,
+            is_spotify_collection=is_collection,
+        )
+
+        keyboard = create_main_keyboard(
+            service="spotify",
+            include_playlist=is_collection or not is_track,
+            spotify_type=spotify_type,
+        )
+
     elif service in {"instagram", "tiktok", "twitter"}:
         keyboard = create_main_keyboard(service=service)
     else:
@@ -529,6 +557,14 @@ async def download_audio_handler(callback: CallbackQuery, state: FSMContext) -> 
             audio_path = track_path
         elif service == "youtube":
             audio_path = await download_audio(url, message)
+        elif service == "spotify":
+            if data.get("is_spotify_collection"):
+                await message.edit_text(
+                    "❌ This Spotify link looks like a playlist/album. Use the Spotify collection option."
+                )
+                await state.clear()
+                return
+            audio_path = await download_spotify_track(url, message)
         else:
             await message.edit_text(
                 "❌ Audio download is not available for this platform.",
@@ -648,6 +684,8 @@ async def download_playlist_handler(callback: CallbackQuery, state: FSMContext) 
             audio_files = await download_soundcloud_playlist(url, message)
         elif service == "youtube":
             audio_files = await download_playlist_audio(url, message)
+        elif service == "spotify":
+            audio_files = await download_spotify_playlist(url, message)
         else:
             await message.edit_text(
                 "❌ Playlist download is not available for this platform.",
