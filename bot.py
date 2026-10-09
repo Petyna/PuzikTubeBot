@@ -1,0 +1,10 @@
+"""Entry point for the modular YouTube Downloader bot."""
+
+import asyncio
+
+from main import main
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+    app.run(host='0.0.0.0', port=8080)
