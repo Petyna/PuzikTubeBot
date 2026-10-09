@@ -13,7 +13,6 @@ from progress_helper import ProgressTracker
 from downloads import (
     download_audio,
     download_playlist_audio,
-    download_instagram_media,
     download_soundcloud_playlist,
     download_soundcloud_track,
     download_spotify_playlist,
@@ -71,7 +70,7 @@ async def handle_incoming_url(message: Message, state: FSMContext) -> None:
 
     if not service:
         await message.answer(
-            "❌ Unsupported link. Send a URL from YouTube, SoundCloud, Spotify, Instagram, TikTok, or Twitter."
+            "❌ Unsupported link. Send a URL from YouTube, SoundCloud, Spotify, TikTok, or Twitter."
         )
         return
 
@@ -289,7 +288,7 @@ async def show_options_handler(callback: CallbackQuery, state: FSMContext) -> No
             spotify_type=spotify_type,
         )
 
-    elif service in {"instagram", "tiktok", "twitter"}:
+    elif service in {"tiktok", "twitter"}:
         keyboard = create_main_keyboard(service=service)
     else:
         await callback.message.edit_text("❌ Unsupported service.")
@@ -390,10 +389,6 @@ async def download_video_handler(callback: CallbackQuery, state: FSMContext) -> 
 
         else:
             service_map = {
-                "instagram": (
-                    "📸 Downloading Instagram media...",
-                    download_instagram_media,
-                ),
                 "tiktok": (
                     "🎬 Downloading TikTok video...",
                     download_tiktok_video,

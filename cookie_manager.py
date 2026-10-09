@@ -1,4 +1,4 @@
-"""Async cookie management system with auto-reload capability."""
+"""Async cookie management system with auto-reload and regeneration."""
 
 import asyncio
 from datetime import datetime
@@ -15,21 +15,44 @@ class CookieManager:
         self.cookie_file = cookie_file
         self._last_modified: Optional[float] = None
         self._lock = asyncio.Lock()
+        self._regen_lock = asyncio.Lock()
         self._reload_task: Optional[asyncio.Task] = None
+        self._auto_regen_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
 
-    async def start_monitoring(self, check_interval: int = 30) -> None:
+    async def start_monitoring(self, check_interval: int = 30, regen_interval: int = 12 * 60 * 60) -> None:
         """Start background task to monitor cookie file changes."""
+        if self._reload_task or self._auto_regen_task:
+            logger.warning("Cookie monitoring already running")
+            return
+
+        self._stop_event = asyncio.Event()
+        await self._check_and_reload()
+
         self._reload_task = asyncio.create_task(
             self._monitor_cookie_file(check_interval)
         )
-        logger.info("Cookie monitoring started for %s", self.cookie_file)
+        self._auto_regen_task = asyncio.create_task(
+            self._auto_regen_loop(regen_interval)
+        )
+        logger.info(
+            "Cookie monitoring and auto-regeneration started for %s",
+            self.cookie_file,
+        )
 
     async def stop_monitoring(self) -> None:
         """Stop the background monitoring task."""
         self._stop_event.set()
-        if self._reload_task:
-            await self._reload_task
+        tasks = [task for task in (self._reload_task, self._auto_regen_task) if task]
+        for task in tasks:
+            try:
+                await task
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Error stopping cookie manager task: %s", exc)
+
+        self._reload_task = None
+        self._auto_regen_task = None
+        self._stop_event = asyncio.Event()
         logger.info("Cookie monitoring stopped")
 
     async def _monitor_cookie_file(self, check_interval: int) -> None:
@@ -68,22 +91,38 @@ class CookieManager:
             except Exception as exc:
                 logger.error("Error checking cookie file: %s", exc)
 
-    def get_cookie_args(self, use_browser_cookies: bool = True) -> list[str]:
+    async def regenerate_cookies(self) -> None:
+        """Regenerate cookies.txt using yt-dlp."""
+        # Disabled browser-based cookie regeneration to hard-decouple from live browser
+        logger.info("Cookie regeneration from browser is disabled. Use static cookie file instead.")
+        return
+
+    async def _auto_regen_loop(self, interval: int) -> None:
+        """Background task to periodically regenerate cookies."""
+        interval = max(int(interval), 1)
+        while not self._stop_event.is_set():
+            await self.regenerate_cookies()
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                continue
+            else:
+                break
+
+    def get_cookie_args(self, use_browser_cookies: bool = False) -> list[str]:
         """
         Get appropriate cookie arguments for yt-dlp.
-        
+
         Args:
             use_browser_cookies: If True, use browser cookies; if False, use file
-        
+
         Returns:
             List of cookie-related arguments for yt-dlp command
         """
-        if use_browser_cookies:
-            return ["--cookies-from-browser", "chrome"]
-        
         if self.cookie_file.exists():
             return ["--cookies", str(self.cookie_file)]
-        
+
+        # Browser cookies disabled to hard-decouple from live browser
         return []
 
     async def is_file_valid(self) -> bool:
