@@ -1,0 +1,33 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+venv/
+.env*/
+.venv/
+
+# Local configuration / secrets
+*.local
+.env
+
+# Downloads and cache directories
+downloads/
+bot_api_data/
+cache_manager.json
+
+# Logs & runtime files
+*.log
+*.sqlite3
+
+# OS / IDE files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Bytecode cache in subfolders
+**/__pycache__/

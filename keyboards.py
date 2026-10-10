@@ -63,9 +63,8 @@ def create_main_keyboard(
                     )
                 ]
             )
-    elif service in {"instagram", "tiktok", "twitter"}:
+    elif service in {"tiktok", "twitter"}:
         labels = {
-            "instagram": "📸 Download Instagram Media",
             "tiktok": "🎬 Download TikTok Video",
             "twitter": "🐦 Download Twitter Video",
         }

@@ -29,6 +29,7 @@ DOWNLOAD_DIR.mkdir(exist_ok=True)
 # Cookie configuration
 COOKIE_FILE = Path("cookies.txt")
 COOKIE_MONITOR_INTERVAL = 30  # Check for cookie file updates every 30 seconds
+COOKIE_REGEN_INTERVAL = 12 * 60 * 60  # Regenerate cookies every 12 hours
 
 # Network / proxy configuration
 YTDLP_PROXY = os.getenv("YTDLP_PROXY")  # e.g., socks5://user:pass@host:port

@@ -14,6 +14,7 @@ from config import (
     CACHE_TTL,
     COOKIE_FILE,
     COOKIE_MONITOR_INTERVAL,
+    COOKIE_REGEN_INTERVAL,
     DOWNLOAD_DIR,
     logger,
 )
@@ -88,7 +89,10 @@ async def run_bot() -> None:
     task_mgr = get_task_manager()
 
     # Start cookie monitoring
-    await cookie_mgr.start_monitoring(COOKIE_MONITOR_INTERVAL)
+    await cookie_mgr.start_monitoring(
+        COOKIE_MONITOR_INTERVAL,
+        COOKIE_REGEN_INTERVAL,
+    )
     logger.info("Cookie manager initialized")
 
     # Start cache cleanup if enabled

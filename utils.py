@@ -129,10 +129,6 @@ def is_spotify_url(url: str) -> bool:
     return bool(re.match(spotify_regex, url))
 
 
-def is_instagram_url(url: str) -> bool:
-    """Validate if URL is from Instagram."""
-    instagram_regex = r"(https?://)?([a-zA-Z0-9-]+\.)?(instagram\.com|instagr\.am)/.+"
-    return bool(re.match(instagram_regex, url))
 
 
 def is_tiktok_url(url: str) -> bool:
@@ -155,8 +151,6 @@ def get_link_service(url: str) -> Optional[str]:
         return "soundcloud"
     if is_spotify_url(url):
         return "spotify"
-    if is_instagram_url(url):
-        return "instagram"
     if is_tiktok_url(url):
         return "tiktok"
     if is_twitter_url(url):

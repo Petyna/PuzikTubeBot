@@ -11,7 +11,6 @@ async def start_handler(message: Message) -> None:
         "**Supported platforms**\n"
         "• YouTube – videos (quality selection), audio (MP3), playlists (first 10 tracks)\n"
         "• SoundCloud – single tracks and playlists\n"
-        "• Instagram – photos, videos, carousels (uses chrome cookies, 1s delay to avoid rate limits)\n"
         "• TikTok – single videos\n"
         "• Twitter/X – single and multi-video posts\n\n"
         "**How to download**\n"
@@ -22,7 +21,6 @@ async def start_handler(message: Message) -> None:
         "• Audio: up to 50MB per track.\n"
         "• Playlists: first 10 tracks, 50MB per track.\n\n"
         "**Tips & notes**\n"
-        "• Keep chrome logged in for Instagram downloads.\n"
         "• Telegram enforces daily upload limits—wait a bit if you hit rate errors.\n"
         "• Just send me a link to start downloading!"
     )
@@ -38,7 +36,6 @@ async def help_handler(callback: CallbackQuery) -> None:
         "**Supported platforms**\n"
         "• YouTube – videos (quality selection), audio (MP3), playlists (first 10 tracks)\n"
         "• SoundCloud – single tracks and playlists\n"
-        "• Instagram – photos, videos, carousels (uses chrome cookies, 1s delay to avoid rate limits)\n"
         "• TikTok – single videos\n"
         "• Twitter/X – single and multi-video posts\n\n"
         "**How to download**\n"
@@ -50,7 +47,6 @@ async def help_handler(callback: CallbackQuery) -> None:
         "• Audio: up to 50MB per track.\n"
         "• Playlists: first 10 tracks, 50MB per track.\n\n"
         "**Tips & notes**\n"
-        "• Keep chrome logged in for Instagram downloads or switch the browser in settings.\n"
         "• Telegram enforces daily upload limits—wait a bit if you hit rate errors.\n"
         "• Use the ❌ Cancel button to return to the main menu at any time."
     )
@@ -65,7 +61,6 @@ async def back_to_start_handler(callback: CallbackQuery) -> None:
         "**Supported platforms**\n"
         "• YouTube – videos (quality selection), audio (MP3), playlists (first 10 tracks)\n"
         "• SoundCloud – single tracks and playlists\n"
-        "• Instagram – photos, videos, carousels (uses chrome cookies, 1s delay to avoid rate limits)\n"
         "• TikTok – single videos\n"
         "• Twitter/X – single and multi-video posts\n\n"
         "**How to download**\n"
@@ -76,7 +71,6 @@ async def back_to_start_handler(callback: CallbackQuery) -> None:
         "• Audio: up to 50MB per track.\n"
         "• Playlists: first 10 tracks, 50MB per track.\n\n"
         "**Tips & notes**\n"
-        "• Keep chrome logged in for Instagram downloads.\n"
         "• Telegram enforces daily upload limits—wait a bit if you hit rate errors.\n"
         "• Just send me a link to start downloading!",
         
@@ -90,7 +84,6 @@ async def close_help_handler(callback: CallbackQuery) -> None:
         "**Supported platforms**\n"
         "• YouTube – videos (quality selection), audio (MP3), playlists (first 10 tracks)\n"
         "• SoundCloud – single tracks and playlists\n"
-        "• Instagram – photos, videos, carousels (uses chrome cookies, 1s delay to avoid rate limits)\n"
         "• TikTok – single videos\n"
         "• Twitter/X – single and multi-video posts\n\n"
         "**How to download**\n"
@@ -101,7 +94,6 @@ async def close_help_handler(callback: CallbackQuery) -> None:
         "• Audio: up to 50MB per track.\n"
         "• Playlists: first 10 tracks, 50MB per track.\n\n"
         "**Tips & notes**\n"
-        "• Keep chrome logged in for Instagram downloads.\n"
         "• Telegram enforces daily upload limits—wait a bit if you hit rate errors.\n"
         "• Just send me a link to start downloading!",
         

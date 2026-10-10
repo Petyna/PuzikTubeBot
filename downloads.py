@@ -16,8 +16,6 @@ async def run_gallery_dl(url: str, output_dir: Path) -> tuple[bool, str]:
     
     # Try different cookie strategies
     strategies = [
-        {"name": "cookies_from_browser", "args": ["--cookies-from-browser", "chrome"]},
-        {"name": "cookies_file", "args": ["--cookies", "instagram_cookies.txt"]},
         {"name": "no_cookies", "args": []},
     ]
     
@@ -70,41 +68,6 @@ async def run_gallery_dl(url: str, output_dir: Path) -> tuple[bool, str]:
     return False, last_output
 
 
-async def run_spotdl(args: list[str], cwd: Path | None = None) -> tuple[bool, str]:
-    """Run a spotdl command asynchronously."""
-    command = [sys.executable, "-m", "spotdl", *args]
-
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-        )
-        stdout, stderr = await process.communicate()
-
-        stdout_text = stdout.decode("utf-8", errors="replace")
-        stderr_text = stderr.decode("utf-8", errors="replace")
-
-        logger.info("Running spotdl command: %s", " ".join(command))
-        logger.info("spotdl return code: %d", process.returncode)
-        if stdout_text:
-            logger.info("spotdl STDOUT: %s", stdout_text[:500])
-        if stderr_text:
-            logger.info("spotdl STDERR: %s", stderr_text[:500])
-
-        if process.returncode == 0:
-            return True, stdout_text or stderr_text
-
-        return False, stderr_text or stdout_text
-
-    except FileNotFoundError:
-        error_msg = "spotdl is not installed. Install it with 'pip install spotdl'."
-        logger.error(error_msg)
-        return False, error_msg
-    except Exception as exc:  # noqa: BLE001
-        logger.error("spotdl execution error: %s", exc)
-        return False, str(exc)
 
 
 def _build_format_selectors(max_height: int, enforce_avc: bool) -> tuple[str, str]:
@@ -613,232 +576,6 @@ async def download_social_media_media(
         return []
 
 
-async def download_instagram_media(
-    url: str,
-    message,
-    *,
-    username: Optional[str] = None,
-    password: Optional[str] = None,
-) -> List[Path]:
-    """
-    Попытаться скачать медиа (видео / фото / карусели) по ссылке Instagram.
-    Если нужны — можно передать username/password для приватного контента.
-    Возвращает список путей к сохранённым файлам (или пустой список при ошибке).
-    """
-    video_extensions = {".mp4", ".m4v", ".mov", ".webm", ".mkv"}
-    photo_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-    supported_extensions = video_extensions | photo_extensions
-
-    try:
-        # Подготовка URL: убрать параметры
-        target_url = url.split("?")[0].rstrip("/")
-
-        download_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        temp_dir = DOWNLOAD_DIR / f"ig_media_{download_id}"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-
-        status_msg = await message.answer("📸 Начинаю загрузку Instagram…")
-
-        output_template = str(temp_dir / "%(playlist_index)03d_%(id)s.%(ext)s")
-        # Format selector that works for both videos and images
-        format_selector = "best"
-
-        # Стратегии: можно пробовать разные варианты
-        strategies = [
-            {
-                "name": "with_cookies_from_browser",
-                "cookies_from_browser": True,
-                "sleep": None,
-                "extra_args": [],
-            },
-            {
-                "name": "with_cookiefile",
-                "cookiefile": True,
-                "sleep": None,
-                "extra_args": [],
-            },
-            {
-                "name": "with_login",
-                "use_login": True,
-                "sleep": None,
-                "extra_args": [],
-            },
-            {
-                "name": "no_cookies_no_login",
-                "cookies_from_browser": False,
-                "use_login": False,
-                "sleep": None,
-                "extra_args": [],
-            },
-        ]
-
-        success = False
-        last_output = ""
-
-        for idx, strat in enumerate(strategies):
-            if idx > 0:
-                await status_msg.edit_text(
-                    f"🔄 Пробую альтернативный метод {idx+1}/{len(strategies)} ({strategies[idx]['name']})…"
-                )
-
-            cmd = [
-                "yt-dlp",
-                "--format", format_selector,
-                "--output", output_template,
-                "--no-check-certificates",
-                "--no-warnings",
-                "--extractor-retries", "3",
-                "--fragment-retries", "3",
-                "--retry-sleep", "1",
-                "--user-agent",
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-            ]
-
-            # Добавляем sleep между фрагментами, если задано
-            if strat.get("sleep") is not None:
-                cmd.extend(["--sleep-interval", str(strat["sleep"])])
-
-            # Добавляем cookie-from-browser, если нужно
-            if strat.get("cookies_from_browser"):
-                cmd.extend(["--cookies-from-browser", "chrome"])
-            # Или указание cookie-файла напрямую
-            if strat.get("cookiefile"):
-                cmd.extend(["--cookies", "instagram_cookies.txt"])
-            # Логин/пароль, если переданы и стратегия позволяет
-            if strat.get("use_login") and username and password:
-                cmd.extend(["--username", username, "--password", password])
-
-            # Дополнительные аргументы, если есть
-            if strat.get("extra_args"):
-                cmd.extend(strat["extra_args"])
-
-            cmd.append(target_url)
-
-            success, output = await run_ytdlp(cmd)
-            last_output = output
-            if success:
-                break
-
-            # Короткая задержка между попытками
-            await asyncio.sleep(0.5)
-
-        # If yt-dlp failed, check if it's because there's no video (images only)
-        if not success and "no video in this post" in last_output.lower():
-            logger.info("yt-dlp failed (no video), trying gallery-dl for images...")
-            await status_msg.edit_text("📸 Пробую загрузить изображения...")
-            
-            # Try gallery-dl as fallback for images
-            gallery_success, gallery_output = await run_gallery_dl(target_url, temp_dir)
-            
-            if not gallery_success:
-                logger.warning("gallery-dl также не смог скачать: %s", gallery_output)
-                
-                # Check if it's an authentication issue
-                if "login" in gallery_output.lower() or "redirect" in gallery_output.lower():
-                    await status_msg.edit_text(
-                        "❌ Требуется авторизация Instagram\n\n"
-                        "Для загрузки изображений:\n"
-                        "1. Войдите в Instagram через Chrome\n"
-                        "2. Попробуйте снова\n\n"
-                        "Или добавьте куки в instagram_cookies.txt"
-                    )
-                else:
-                    await status_msg.edit_text(
-                        "❌ Загрузка не удалась.\n"
-                        "Убедитесь, что gallery-dl установлен: pip install gallery-dl"
-                    )
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                return []
-            
-            success = True
-            logger.info("gallery-dl успешно скачал медиа")
-        
-        if not success:
-            logger.warning("Не удалось скачать Instagram медиа: %s", last_output)
-            await status_msg.edit_text(
-                "❌ Загрузка не удалась. Возможные причины:\n"
-                "- Приватный аккаунт / сторис\n"
-                "- Требуется авторизация / куки\n"
-                "- Ссылка недействительна или устарела\n"
-            )
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return []
-
-        # Найти скачанные файлы по расширению
-        files = sorted(
-            p for p in temp_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in supported_extensions
-        )
-
-        # If no files downloaded but command succeeded, try gallery-dl for images
-        if not files and success:
-            logger.info("yt-dlp succeeded but no files found, trying gallery-dl...")
-            await status_msg.edit_text("📸 Пробую загрузить изображения...")
-            
-            gallery_success, gallery_output = await run_gallery_dl(target_url, temp_dir)
-            
-            if gallery_success:
-                # Re-scan for files
-                files = sorted(
-                    p for p in temp_dir.iterdir()
-                    if p.is_file() and p.suffix.lower() in supported_extensions
-                )
-                logger.info("gallery-dl downloaded %d files", len(files))
-            else:
-                # Check if it's an authentication issue
-                if "login" in gallery_output.lower() or "redirect" in gallery_output.lower():
-                    await status_msg.edit_text(
-                        "❌ Требуется авторизация Instagram\n\n"
-                        "Для загрузки изображений:\n"
-                        "1. Войдите в Instagram через Chrome\n"
-                        "2. Попробуйте снова\n\n"
-                        "Или добавьте куки в instagram_cookies.txt"
-                    )
-                else:
-                    await status_msg.edit_text("❌ Не удалось загрузить изображения")
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                return []
-
-        if not files:
-            await status_msg.edit_text("❌ Файлы загрузки не найдены")
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return []
-
-        result_paths: List[Path] = []
-        for media_path in files:
-            suffix = media_path.suffix.lower()
-            size = media_path.stat().st_size
-            if suffix in video_extensions:
-                if size > MAX_VIDEO_SIZE:
-                    await status_msg.edit_text(f"🔧 Сжимаю {media_path.name} …")
-                    compressed = await compress_video(media_path, MAX_VIDEO_SIZE)
-                    if compressed is None:
-                        logger.warning("Файл %s не удалось сжать — пропускаю", media_path)
-                        continue
-                    media_path = compressed
-            elif suffix in photo_extensions:
-                if size > MAX_FILE_SIZE:
-                    logger.warning("Фото %s превышает лимит (%d байт)", media_path.name, size)
-                    continue
-
-            result_paths.append(media_path)
-
-        if not result_paths:
-            await status_msg.edit_text("❌ Все файлы слишком большие для отправки")
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return []
-
-        await status_msg.edit_text(f"✅ Успешно: скачано {len(result_paths)} медиа")
-        return result_paths
-
-    except Exception as exc:
-        logger.error("Ошибка при скачивании Instagram: %s", exc, exc_info=True)
-        try:
-            await message.answer("❌ Внутренняя ошибка при скачивании")
-        except Exception:
-            pass
-        return []
 
 
 async def download_tiktok_video(url: str, message: Message) -> List[Path]:
@@ -983,7 +720,7 @@ def _collect_spotify_audio_files(temp_dir: Path) -> list[Path]:
 
 
 async def download_spotify_track(url: str, message: Message) -> Optional[Path]:
-    """Download a single Spotify resource (track/episode) as MP3 via spotdl."""
+    """Download a single Spotify resource (track/episode) as MP3 via yt-dlp."""
     temp_dir: Path | None = None
     status_msg: Message | None = None
 
@@ -994,15 +731,20 @@ async def download_spotify_track(url: str, message: Message) -> Optional[Path]:
 
         status_msg = await message.answer("🎧 Starting Spotify download...")
 
-        args = [
-            "download",
+        output_template = str(temp_dir / "%(title)s.%(ext)s")
+        
+        command = [
+            "yt-dlp",
+            "--format", "bestaudio/best",
+            "--extract-audio",
+            "--audio-format", "mp3",
+            "--audio-quality", "320K",
+            "--output", output_template,
+            "--no-warnings",
             url,
-            "--format",
-            "mp3",
-            "--bitrate",
-            "320k",
         ]
-        success, output = await run_spotdl(args, cwd=temp_dir)
+
+        success, output = await run_ytdlp(command)
 
         if not success:
             if status_msg:
@@ -1039,7 +781,7 @@ async def download_spotify_track(url: str, message: Message) -> Optional[Path]:
 
 
 async def download_spotify_playlist(url: str, message: Message) -> List[Path]:
-    """Download Spotify playlist/album/artist/show via spotdl."""
+    """Download Spotify playlist/album/artist/show via yt-dlp."""
     temp_dir: Path | None = None
     status_msg: Message | None = None
 
@@ -1050,15 +792,20 @@ async def download_spotify_playlist(url: str, message: Message) -> List[Path]:
 
         status_msg = await message.answer("📝 Starting Spotify collection download...")
 
-        args = [
-            "download",
+        output_template = str(temp_dir / "%(playlist_index)03d - %(title)s.%(ext)s")
+        
+        command = [
+            "yt-dlp",
+            "--format", "bestaudio/best",
+            "--extract-audio",
+            "--audio-format", "mp3",
+            "--audio-quality", "320K",
+            "--output", output_template,
+            "--no-warnings",
             url,
-            "--format",
-            "mp3",
-            "--bitrate",
-            "320k",
         ]
-        success, output = await run_spotdl(args, cwd=temp_dir)
+
+        success, output = await run_ytdlp(command)
 
         if not success:
             if status_msg:
@@ -1073,7 +820,11 @@ async def download_spotify_playlist(url: str, message: Message) -> List[Path]:
             shutil.rmtree(temp_dir, ignore_errors=True)
             return []
 
-        valid_files = [file for file in files if get_file_size(file) <= MAX_FILE_SIZE]
+        valid_files = []
+        for audio_path in files:
+            file_size = get_file_size(audio_path)
+            if file_size <= MAX_FILE_SIZE:
+                valid_files.append(audio_path)
 
         if not valid_files:
             if status_msg:
